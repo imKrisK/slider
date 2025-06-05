@@ -4,10 +4,13 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "dev": "../safeguard.sh vite",
+    "build": "../safeguard.sh vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "../safeguard.sh vite preview",
+    "dev:unsafe": "vite",
+    "build:unsafe": "vite build",
+    "preview:unsafe": "vite preview"
   },
   "dependencies": {
     "react": "^19.1.0",

@@ -9,7 +9,44 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY); // Use .env for secret key
+
+// Load deployment configuration if available
+let deploymentConfig = {
+  ENABLE_DEPLOYMENT: true,
+  ENABLE_MONGODB: true,
+  ENABLE_STRIPE: true,
+  ENABLE_EMAIL: true,
+  BACKEND_PORT: 3000
+};
+
+// Try to load deployment configuration
+try {
+  const configPath = path.join(__dirname, '..', 'deployment.config');
+  if (fs.existsSync(configPath)) {
+    const configContent = fs.readFileSync(configPath, 'utf8');
+    configContent.split('\n').forEach(line => {
+      if (line && !line.startsWith('#')) {
+        const [key, value] = line.split('=');
+        if (key && value) {
+          deploymentConfig[key.trim()] = value.trim().replace(/"|'/g, '');
+        }
+      }
+    });
+    console.log('Deployment configuration loaded successfully.');
+  }
+} catch (err) {
+  console.error('Failed to load deployment configuration:', err);
+}
+
+// Check if deployment is enabled
+if (deploymentConfig.ENABLE_DEPLOYMENT === 'false') {
+  console.log('Deployment is disabled in configuration. Server will not start.');
+  process.exit(0);
+}
+
+// Initialize services based on configuration
+const stripe = deploymentConfig.ENABLE_STRIPE === 'true' ? 
+  Stripe(process.env.STRIPE_SECRET_KEY) : null;
 
 const app = express();
 const server = http.createServer(app);
@@ -38,8 +75,27 @@ const upload = multer({ storage });
 // Serve uploaded images statically
 app.use('/uploads', express.static(uploadDir));
 
+// Health check endpoint for monitoring and status checks
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'UP',
+    timestamp: new Date().toISOString(),
+    version: '1.0.0',
+    deployment: deploymentConfig.ENABLE_DEPLOYMENT === 'true',
+    mongodb: deploymentConfig.ENABLE_MONGODB === 'true',
+    uptime: process.uptime()
+  });
+});
+
 // MongoDB (mongoose) setup
-mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/slider');
+if (deploymentConfig.ENABLE_MONGODB === 'true') {
+  const mongoUri = deploymentConfig.MONGO_URI || process.env.MONGO_URI || 'mongodb://localhost:27017/slider';
+  mongoose.connect(mongoUri)
+    .then(() => console.log('MongoDB connected successfully'))
+    .catch(err => console.error('MongoDB connection error:', err));
+} else {
+  console.log('MongoDB connection disabled in configuration.');
+}
 
 const productSchema = new mongoose.Schema({
   name: String,
@@ -154,6 +210,12 @@ app.post('/create-checkout-session', async (req, res) => {
   if (!product || product.status !== 'Available') {
     return res.status(400).json({ error: 'Product not available' });
   }
+  
+  if (deploymentConfig.ENABLE_STRIPE !== 'true' || !stripe) {
+    console.log('Stripe payment disabled in configuration');
+    return res.status(503).json({ error: 'Payment processing is currently disabled' });
+  }
+  
   try {
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -178,33 +240,45 @@ app.post('/create-checkout-session', async (req, res) => {
 });
 
 // Email config (use your real SMTP credentials)
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.MAIL_USER,
-    pass: process.env.MAIL_PASS
-  }
-});
+let transporter = null;
+if (deploymentConfig.ENABLE_EMAIL === 'true') {
+  transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: process.env.MAIL_USER,
+      pass: process.env.MAIL_PASS
+    }
+  });
+  console.log('Email service initialized');
+} else {
+  console.log('Email service disabled in configuration');
+}
 
 app.post('/shipping-info', async (req, res) => {
   const { name, address, city, zip, email } = req.body;
   try {
-    // Send confirmation to user
-    await transporter.sendMail({
-      from: process.env.MAIL_USER,
-      to: email,
-      subject: 'Order Confirmation',
-      text: `Thank you ${name}! Your order will be shipped to: ${address}, ${city}, ${zip}`
-    });
-    // Send notification to admin
-    await transporter.sendMail({
-      from: process.env.MAIL_USER,
-      to: process.env.MAIL_USER,
-      subject: 'New Order Shipping Info',
-      text: `Order for ${name}\nAddress: ${address}, ${city}, ${zip}\nEmail: ${email}`
-    });
+    if (deploymentConfig.ENABLE_EMAIL === 'true' && transporter) {
+      // Send confirmation to user
+      await transporter.sendMail({
+        from: process.env.MAIL_USER,
+        to: email,
+        subject: 'Order Confirmation',
+        text: `Thank you ${name}! Your order will be shipped to: ${address}, ${city}, ${zip}`
+      });
+      // Send notification to admin
+      await transporter.sendMail({
+        from: process.env.MAIL_USER,
+        to: process.env.MAIL_USER,
+        subject: 'New Order Shipping Info',
+        text: `Order for ${name}\nAddress: ${address}, ${city}, ${zip}\nEmail: ${email}`
+      });
+      console.log(`Email notifications sent for order from ${name}`);
+    } else {
+      console.log(`Email service disabled. Order data: ${name}, ${address}, ${city}, ${zip}, ${email}`);
+    }
     res.json({ ok: true });
   } catch (err) {
+    console.error('Error processing shipping info:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -232,4 +306,8 @@ setInterval(async () => {
   }
 }, 1000);
 
-server.listen(3000, () => console.log('Socket.io server running on port 3000'));
+const PORT = deploymentConfig.BACKEND_PORT || process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Socket.io server running on port ${PORT}`);
+  console.log(`Deployment mode: ${deploymentConfig.ENABLE_DEPLOYMENT === 'true' ? 'Enabled' : 'Disabled'}`);
+});

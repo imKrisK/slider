@@ -5,7 +5,46 @@ require('dotenv').config();
 const Stripe = require('stripe');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY); // Use .env for secret key
+const fs = require('fs');
+const path = require('path');
+
+// Load deployment configuration if available
+let deploymentConfig = {
+  ENABLE_DEPLOYMENT: true,
+  ENABLE_MONGODB: true,
+  ENABLE_STRIPE: true,
+  ENABLE_EMAIL: true,
+  BACKEND_PORT: 3000
+};
+
+// Try to load deployment configuration
+try {
+  const configPath = path.join(__dirname, 'deployment.config');
+  if (fs.existsSync(configPath)) {
+    const configContent = fs.readFileSync(configPath, 'utf8');
+    configContent.split('\n').forEach(line => {
+      if (line && !line.startsWith('#')) {
+        const [key, value] = line.split('=');
+        if (key && value) {
+          deploymentConfig[key.trim()] = value.trim().replace(/"|'/g, '');
+        }
+      }
+    });
+    console.log('Deployment configuration loaded successfully in root server.js');
+  }
+} catch (err) {
+  console.error('Failed to load deployment configuration:', err);
+}
+
+// Check if deployment is enabled
+if (deploymentConfig.ENABLE_DEPLOYMENT === 'false') {
+  console.log('Deployment is disabled in configuration. Root server will not start.');
+  process.exit(0);
+}
+
+// Initialize stripe based on configuration
+const stripe = deploymentConfig.ENABLE_STRIPE === 'true' ? 
+  Stripe(process.env.STRIPE_SECRET_KEY) : null;
 
 const app = express();
 const server = http.createServer(app);
@@ -105,13 +144,19 @@ app.post('/create-checkout-session', async (req, res) => {
 });
 
 // Email config (use your real SMTP credentials)
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.MAIL_USER,
-    pass: process.env.MAIL_PASS
-  }
-});
+let transporter = null;
+if (deploymentConfig.ENABLE_EMAIL === 'true') {
+  transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: process.env.MAIL_USER,
+      pass: process.env.MAIL_PASS
+    }
+  });
+  console.log('Email service initialized in root server.js');
+} else {
+  console.log('Email service disabled in configuration for root server.js');
+}
 
 app.post('/shipping-info', async (req, res) => {
   const { name, address, city, zip, email } = req.body;
@@ -132,4 +177,8 @@ app.post('/shipping-info', async (req, res) => {
   res.json({ ok: true });
 });
 
-server.listen(3000, () => console.log('Socket.io server running on port 3000'));
+const PORT = deploymentConfig.BACKEND_PORT || process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Root server running on port ${PORT}`);
+  console.log(`Deployment mode: ${deploymentConfig.ENABLE_DEPLOYMENT === 'true' ? 'Enabled' : 'Disabled'}`);
+});

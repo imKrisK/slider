@@ -1,8 +1,11 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { io } from 'socket.io-client';
 import ShippingForm from './ShippingForm';
+import API_CONFIG from './config';
+import { apiPost, apiGet } from './apiUtils';
 
-const SOCKET_URL = 'http://localhost:3000';
+// Use the configurable socket URL from config
+const SOCKET_URL = API_CONFIG.SOCKET_URL;
 
 function Streaming({ notify }) {
   // --- State ---
@@ -393,14 +396,22 @@ function Streaming({ notify }) {
       const formData = new FormData();
       formData.append('image', productImage);
       try {
-        const res = await fetch('http://localhost:3000/upload-image', {
+        // Using direct fetch for FormData since our apiUtils is optimized for JSON
+        const res = await fetch(`${API_CONFIG.BASE_URL}/upload-image`, {
           method: 'POST',
           body: formData
         });
+        
+        if (!res.ok) {
+          const errorText = await res.text().catch(() => 'Unknown error');
+          throw new Error(`Image upload failed: ${errorText}`);
+        }
+        
         const data = await res.json();
         imageUrl = data.imageUrl;
       } catch (err) {
-        notify('Image upload failed', 'error');
+        console.error('Image upload error:', err);
+        notify(`Image upload failed: ${err.message || 'Please try again'}`, 'error');
         return;
       }
     }
@@ -426,19 +437,21 @@ function Streaming({ notify }) {
     }
     notify('Redirecting to payment...', 'info');
     try {
-      const res = await fetch('http://localhost:3000/create-checkout-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ productId: product.id, user: username })
-      });
-      const data = await res.json();
+      // Use the apiPost utility with retry for better reliability
+      const data = await apiPost('create-checkout-session', 
+        { productId: product.id, user: username },
+        {},
+        { maxRetries: 2, retryDelay: 800 } // Custom retry options
+      );
+      
       if (data.url) {
         window.location.href = data.url;
       } else {
-        notify(data.error || 'Payment error', 'error');
+        notify(data.error || 'Payment processing failed', 'error');
       }
     } catch (err) {
-      notify('Payment error', 'error');
+      console.error('Payment processing error:', err);
+      notify(`Payment error: ${err.message || 'Please try again later'}`, 'error');
     }
   };
 
@@ -451,13 +464,14 @@ function Streaming({ notify }) {
 
   const handleShippingSubmit = async (data) => {
     setShippingData(data);
-    notify('Shipping info submitted! Confirmation email will be sent.', 'success');
-    // Send to backend for email (see backend step)
-    await fetch('http://localhost:3000/shipping-info', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
+    try {
+      // Use the apiPost utility with retry for better reliability
+      await apiPost('shipping-info', data);
+      notify('Shipping info submitted! Confirmation email will be sent.', 'success');
+    } catch (err) {
+      console.error('Shipping submission error:', err);
+      notify(`We've saved your shipping info, but there was an issue with email confirmation: ${err.message}`, 'warning');
+    }
   };
 
   // Camera control logic

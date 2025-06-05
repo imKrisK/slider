@@ -10,8 +10,47 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const mongoose = require('mongoose');
+const fs = require('fs');
+const path = require('path');
 
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+// Load deployment configuration if available
+let deploymentConfig = {
+  ENABLE_DEPLOYMENT: true,
+  ENABLE_MONGODB: true,
+  ENABLE_STRIPE: true,
+  ENABLE_EMAIL: true,
+  BACKEND_PORT: 3000
+};
+
+// Try to load deployment configuration
+try {
+  const configPath = path.join(__dirname, '..', 'deployment.config');
+  if (fs.existsSync(configPath)) {
+    const configContent = fs.readFileSync(configPath, 'utf8');
+    configContent.split('\n').forEach(line => {
+      if (line && !line.startsWith('#')) {
+        const [key, value] = line.split('=');
+        if (key && value) {
+          deploymentConfig[key.trim()] = value.trim().replace(/"|'/g, '');
+        }
+      }
+    });
+    console.log('Deployment configuration loaded successfully in auth.js.');
+  }
+} catch (err) {
+  console.error('Failed to load deployment configuration:', err);
+}
+
+// Check if deployment is enabled
+if (deploymentConfig.ENABLE_DEPLOYMENT === 'false') {
+  console.log('Deployment is disabled in configuration. Auth server will not start.');
+  process.exit(0);
+}
+
+// Initialize stripe based on configuration
+const stripe = deploymentConfig.ENABLE_STRIPE === 'true' ? 
+  Stripe(process.env.STRIPE_SECRET_KEY) : null;
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
@@ -28,9 +67,14 @@ const limiter = rateLimit({
 app.use(limiter);
 
 // MongoDB connection
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log('MongoDB connected'))
-  .catch(err => console.error('MongoDB connection error:', err));
+if (deploymentConfig.ENABLE_MONGODB === 'true') {
+  const mongoUri = deploymentConfig.MONGO_URI || process.env.MONGO_URI || 'mongodb://localhost:27017/slider';
+  mongoose.connect(mongoUri)
+    .then(() => console.log('MongoDB connected in auth.js'))
+    .catch(err => console.error('MongoDB connection error:', err));
+} else {
+  console.log('MongoDB connection disabled in configuration for auth.js');
+}
 
 // User schema
 const userSchema = new mongoose.Schema({
@@ -175,4 +219,8 @@ app.post('/products/update', async (req, res) => {
   res.json(product);
 });
 
-server.listen(3000, () => console.log('Socket.io server running on port 3000'));
+const PORT = deploymentConfig.BACKEND_PORT || process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Auth server running on port ${PORT}`);
+  console.log(`Deployment mode: ${deploymentConfig.ENABLE_DEPLOYMENT === 'true' ? 'Enabled' : 'Disabled'}`);
+});

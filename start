@@ -1,0 +1,67 @@
+#!/bin/bash
+
+# =======================================
+# Slider App - One-Line Starter
+# =======================================
+# This script provides the simplest possible way to start the application
+# You can share this command with team members who need a quick start
+
+# Set terminal colors
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;36m'
+NC='\033[0m' # No Color
+
+echo -e "${BLUE}[Slider]${NC} Starting application..."
+
+# Backup original config
+CONFIG_FILE="./deployment.config"
+cp "$CONFIG_FILE" "${CONFIG_FILE}.bak" 2>/dev/null
+
+# Enable deployment
+sed -i '' 's/ENABLE_DEPLOYMENT=false/ENABLE_DEPLOYMENT=true/g' "$CONFIG_FILE" 2>/dev/null
+
+# Start MongoDB if needed
+if ! pgrep -x mongod > /dev/null; then
+  echo -e "${YELLOW}[Slider]${NC} Starting MongoDB..."
+  brew services start mongodb-community > /dev/null 2>&1
+  sleep 3
+fi
+
+# Start backend server
+echo -e "${YELLOW}[Slider]${NC} Starting backend server..."
+cd backend
+NODE_PATH="$(which node)"
+$NODE_PATH server.js > ../backend.log 2>&1 &
+BACKEND_PID=$!
+cd ..
+
+# Start frontend server
+echo -e "${YELLOW}[Slider]${NC} Starting frontend server..."
+cd frontend
+npm run dev > ../frontend.log 2>&1 &
+FRONTEND_PID=$!
+cd ..
+
+echo -e "${GREEN}[Slider]${NC} Application started! Opening in browser..."
+
+# Open in browser
+sleep 2
+open "http://localhost:5173"
+
+echo -e "${BLUE}[Slider]${NC} Press Ctrl+C to stop servers"
+
+# Register cleanup function
+cleanup() {
+  echo -e "\n${YELLOW}[Slider]${NC} Stopping servers..."
+  kill $BACKEND_PID $FRONTEND_PID 2>/dev/null
+  if [ -f "${CONFIG_FILE}.bak" ]; then
+    mv "${CONFIG_FILE}.bak" "$CONFIG_FILE" 2>/dev/null
+  fi
+  echo -e "${GREEN}[Slider]${NC} Servers stopped"
+}
+
+trap cleanup EXIT INT TERM
+
+# Wait for user to press Ctrl+C
+wait $BACKEND_PID $FRONTEND_PID
